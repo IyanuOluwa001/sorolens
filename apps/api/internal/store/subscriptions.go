@@ -12,6 +12,7 @@ import (
 // subscriptionColumns is the projection shared by every read so the scan order
 // stays in one place.
 const subscriptionColumns = `id, contract_id, webhook_url, severity_filter,
+	channel_type, routing_key,
 	signing_secret, signing_secret_hash, signing_secret_created_at, signing_secret_rotated_at,
 	created_at, updated_at`
 
@@ -19,6 +20,7 @@ func scanSubscription(row pgx.Row) (AlertSubscription, error) {
 	var sub AlertSubscription
 	err := row.Scan(
 		&sub.ID, &sub.ContractID, &sub.WebhookURL, &sub.SeverityFilter,
+		&sub.ChannelType, &sub.RoutingKey,
 		&sub.SigningSecret, &sub.SigningSecretHash, &sub.SigningSecretCreatedAt, &sub.SigningSecretRotatedAt,
 		&sub.CreatedAt, &sub.UpdatedAt,
 	)
@@ -28,11 +30,12 @@ func scanSubscription(row pgx.Row) (AlertSubscription, error) {
 func (s *postgresStore) Create(ctx context.Context, sub AlertSubscription) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO alert_subscriptions
-			(id, contract_id, webhook_url, severity_filter,
+			(id, contract_id, webhook_url, severity_filter, channel_type, routing_key,
 			 signing_secret, signing_secret_hash, signing_secret_created_at, signing_secret_rotated_at,
 			 created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		sub.ID, sub.ContractID, sub.WebhookURL, sub.SeverityFilter,
+		channelOrDefault(sub.ChannelType), sub.RoutingKey,
 		sub.SigningSecret, sub.SigningSecretHash, sub.SigningSecretCreatedAt, sub.SigningSecretRotatedAt,
 		sub.CreatedAt, sub.UpdatedAt,
 	)
@@ -101,6 +104,14 @@ func (s *postgresStore) Delete(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// channelOrDefault maps an unset channel to the original webhook behaviour.
+func channelOrDefault(channel string) string {
+	if channel == "" {
+		return "webhook"
+	}
+	return channel
 }
 
 func (s *postgresStore) ListAll(ctx context.Context) ([]AlertSubscription, error) {

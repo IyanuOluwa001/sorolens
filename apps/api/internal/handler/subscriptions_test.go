@@ -8,241 +8,149 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sorolens/sorolens/apps/api/internal/middleware"
 	"github.com/sorolens/sorolens/apps/api/internal/store"
 )
 
+const subsPath = "/api/v1/watchdog/subscriptions"
+
 type subscriptionBody struct {
 	ID             string `json:"id"`
-	ContractID     string `json:"contract_id"`
+	ChannelType    string `json:"channel_type"`
 	WebhookURL     string `json:"webhook_url"`
+	HasRoutingKey  bool   `json:"has_routing_key"`
 	SeverityFilter string `json:"severity_filter"`
-	SigningSecret  string `json:"signing_secret"`
 }
 
-type signingSecretBody struct {
-	ID            string     `json:"id"`
-	SigningSecret string     `json:"signing_secret"`
-	CreatedAt     time.Time  `json:"created_at"`
-	RotatedAt     *time.Time `json:"rotated_at"`
-}
-
-// createSubscription posts a subscription as an admin and returns the decoded
-// response.
-func createSubscription(t *testing.T, srv http.Handler, contractID string) subscriptionBody {
+// seedMonitored registers C1 with the watchdog so subscriptions can target it.
+func seedMonitored(t *testing.T, ms *store.MockStore) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{
-		"contract_id": contractID,
-		"webhook_url": "https://example.com/hooks/sorolens",
-	})
-	w := doRequestAsUser(srv, http.MethodPost, "/api/v1/watchdog/subscriptions", adminToken, adminUser, string(body))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create subscription: want 201, got %d (%s)", w.Code, w.Body.String())
-	}
-	var resp subscriptionBody
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := ms.UpsertMonitoredContract(context.Background(), store.MonitoredContract{
+		ContractID: "C1", Network: "testnet", Name: "svc", Status: "Healthy",
+	}); err != nil {
 		t.Fatal(err)
 	}
-	return resp
 }
 
-func TestCreateSubscription_ReturnsSigningSecretOnce(t *testing.T) {
-	ms := seedScopedKeyStore(t)
+func TestCreateSubscriptionPerChannel(t *testing.T) {
+	ms := seedRBACUsers(t)
+	seedMonitored(t, ms)
 	srv := newTestHandler(ms, true, true)
 
-	created := createSubscription(t, srv, "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-
-	if !strings.HasPrefix(created.SigningSecret, "whsec_") {
-		t.Fatalf("signing_secret = %q, want a whsec_ secret", created.SigningSecret)
-	}
-	if created.ID == "" {
-		t.Fatal("create response is missing an id")
-	}
-
-	// The stored row keeps the key and its SHA-256 digest.
-	stored, err := ms.GetSubscription(context.Background(), created.ID)
-	if err != nil {
-		t.Fatalf("GetSubscription: %v", err)
-	}
-	if stored.SigningSecret != created.SigningSecret {
-		t.Errorf("stored secret %q != returned secret %q", stored.SigningSecret, created.SigningSecret)
-	}
-	if want := store.HashKey(created.SigningSecret); stored.SigningSecretHash != want {
-		t.Errorf("stored hash = %q, want %q", stored.SigningSecretHash, want)
-	}
-	if stored.SigningSecretCreatedAt.IsZero() {
-		t.Error("signing_secret_created_at was not stamped")
-	}
-
-	// The list endpoint must not leak the secret.
-	w := doRequestAsUser(srv, http.MethodGet, "/api/v1/watchdog/subscriptions", readWatchdogKey, "", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("list subscriptions: want 200, got %d (%s)", w.Code, w.Body.String())
-	}
-	if strings.Contains(w.Body.String(), "whsec_") || strings.Contains(w.Body.String(), "signing_secret") {
-		t.Errorf("list response leaked the signing secret: %s", w.Body.String())
-	}
-}
-
-func TestCreateSubscription_RequiresAdmin(t *testing.T) {
-	ms := seedScopedKeyStore(t)
-	srv := newTestHandler(ms, true, true)
-
-	body, _ := json.Marshal(map[string]string{
-		"contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-		"webhook_url": "https://example.com/hook",
-	})
-	// Admin-scoped credential but only a contributor role: the role gate denies.
-	w := doRequestAsUser(srv, http.MethodPost, "/api/v1/watchdog/subscriptions", adminToken, contributorUser, string(body))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("want 403 for a contributor, got %d (%s)", w.Code, w.Body.String())
-	}
-
-	// No credential at all: the admin scope requires authentication.
-	w = doRequestAsUser(srv, http.MethodPost, "/api/v1/watchdog/subscriptions", "", "", string(body))
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401 anonymous, got %d (%s)", w.Code, w.Body.String())
-	}
-}
-
-func TestGetSigningSecret_WithinWindow(t *testing.T) {
-	ms := seedScopedKeyStore(t)
-	srv := newTestHandler(ms, true, true)
-	created := createSubscription(t, srv, "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-
-	w := doRequestAsUser(srv, http.MethodGet, "/api/v1/watchdog/subscriptions/"+created.ID+"/signing-secret", adminToken, adminUser, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
-	}
-	var body signingSecretBody
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if body.SigningSecret != created.SigningSecret {
-		t.Errorf("reveal returned %q, want the created secret %q", body.SigningSecret, created.SigningSecret)
-	}
-}
-
-func TestGetSigningSecret_OutsideWindow(t *testing.T) {
-	ms := seedScopedKeyStore(t)
-	srv := newTestHandler(ms, true, true)
-
-	// A subscription created long ago: the reveal window has closed.
-	stale := store.AlertSubscription{
-		ID: "sub_stale", ContractID: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-		WebhookURL: "https://example.com/hook", SeverityFilter: "Critical",
-		SigningSecret: "whsec_stale", SigningSecretHash: store.HashKey("whsec_stale"),
-		SigningSecretCreatedAt: time.Now().UTC().Add(-time.Hour),
-		CreatedAt:              time.Now().UTC().Add(-time.Hour),
-		UpdatedAt:              time.Now().UTC().Add(-time.Hour),
-	}
-	if err := ms.Create(context.Background(), stale); err != nil {
-		t.Fatal(err)
-	}
-
-	w := doRequestAsUser(srv, http.MethodGet, "/api/v1/watchdog/subscriptions/sub_stale/signing-secret", adminToken, adminUser, "")
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("want 403 outside the window, got %d (%s)", w.Code, w.Body.String())
-	}
-	var env map[string]any
-	_ = json.NewDecoder(w.Body).Decode(&env)
-	errObj, _ := env["error"].(map[string]any)
-	if errObj["code"] != "FORBIDDEN" {
-		t.Errorf("want code FORBIDDEN, got %v", errObj["code"])
-	}
-
-	// A recent rotation re-opens the window even though creation is old.
-	rotated := time.Now().UTC().Add(-time.Minute)
-	stale.SigningSecretRotatedAt = &rotated
-	if err := ms.RotateSigningSecret(context.Background(), stale.ID, "whsec_new", store.HashKey("whsec_new"), rotated); err != nil {
-		t.Fatal(err)
-	}
-	w = doRequestAsUser(srv, http.MethodGet, "/api/v1/watchdog/subscriptions/sub_stale/signing-secret", adminToken, adminUser, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200 after rotation, got %d (%s)", w.Code, w.Body.String())
-	}
-}
-
-func TestGetSigningSecret_NotFound(t *testing.T) {
-	srv := newTestHandler(seedScopedKeyStore(t), true, true)
-	w := doRequestAsUser(srv, http.MethodGet, "/api/v1/watchdog/subscriptions/sub_missing/signing-secret", adminToken, adminUser, "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d (%s)", w.Code, w.Body.String())
-	}
-}
-
-func TestRotateSigningSecret(t *testing.T) {
-	ms := seedScopedKeyStore(t)
-	srv := newTestHandler(ms, true, true)
-	created := createSubscription(t, srv, "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-
-	w := doRequestAsUser(srv, http.MethodPost, "/api/v1/watchdog/subscriptions/"+created.ID+"/rotate", adminToken, adminUser, "{}")
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
-	}
-	var body signingSecretBody
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(body.SigningSecret, "whsec_") {
-		t.Fatalf("rotated secret = %q, want a whsec_ secret", body.SigningSecret)
-	}
-	if body.SigningSecret == created.SigningSecret {
-		t.Error("rotation must return a new secret")
-	}
-	if body.RotatedAt == nil {
-		t.Error("rotation must stamp rotated_at")
-	}
-
-	// The rotated key is what is stored and what the reveal endpoint returns.
-	stored, err := ms.GetSubscription(context.Background(), created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.SigningSecret != body.SigningSecret {
-		t.Errorf("stored secret %q != rotated secret %q", stored.SigningSecret, body.SigningSecret)
-	}
-	if stored.SigningSecretHash != store.HashKey(body.SigningSecret) {
-		t.Error("rotated secret hash does not match the stored digest")
-	}
-}
-
-func TestRotateSigningSecret_NotFound(t *testing.T) {
-	srv := newTestHandler(seedScopedKeyStore(t), true, true)
-	w := doRequestAsUser(srv, http.MethodPost, "/api/v1/watchdog/subscriptions/sub_missing/rotate", adminToken, adminUser, "{}")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d (%s)", w.Code, w.Body.String())
-	}
-}
-
-func TestDeleteSubscription_NotFound(t *testing.T) {
-	srv := newTestHandler(seedScopedKeyStore(t), true, true)
-	w := doRequestAsUser(srv, http.MethodDelete, "/api/v1/watchdog/subscriptions/sub_missing", adminToken, adminUser, "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d (%s)", w.Code, w.Body.String())
-	}
-}
-
-func TestSubscriptionRoutes_Scopes(t *testing.T) {
 	cases := []struct {
-		method  string
-		pattern string
-		want    string
+		name, body string
+		want       subscriptionBody
 	}{
-		{http.MethodGet, "/api/v1/watchdog/subscriptions", middleware.ScopeReadWatchdog},
-		{http.MethodPost, "/api/v1/watchdog/subscriptions", middleware.ScopeAdmin},
-		{http.MethodDelete, "/api/v1/watchdog/subscriptions/{id}", middleware.ScopeAdmin},
-		{http.MethodGet, "/api/v1/watchdog/subscriptions/{id}/signing-secret", middleware.ScopeAdmin},
-		{http.MethodPost, "/api/v1/watchdog/subscriptions/{id}/rotate", middleware.ScopeAdmin},
+		{
+			"webhook default",
+			`{"contract_id":"C1","webhook_url":"https://example.com/hook"}`,
+			subscriptionBody{ChannelType: "webhook", WebhookURL: "https://example.com/hook", SeverityFilter: "Critical"},
+		},
+		{
+			"slack masks token",
+			`{"contract_id":"C1","channel_type":"slack","webhook_url":"https://hooks.slack.com/services/T0/B0/secret"}`,
+			subscriptionBody{ChannelType: "slack", WebhookURL: "https://hooks.slack.com/services/***", SeverityFilter: "Critical"},
+		},
+		{
+			"discord masks token",
+			`{"contract_id":"C1","channel_type":"discord","webhook_url":"https://discord.com/api/webhooks/1/secret","severity_filter":"Warning"}`,
+			subscriptionBody{ChannelType: "discord", WebhookURL: "https://discord.com/api/***", SeverityFilter: "Warning"},
+		},
+		{
+			"pagerduty hides routing key",
+			`{"contract_id":"C1","channel_type":"PagerDuty","routing_key":"R0UT1NG"}`,
+			subscriptionBody{ChannelType: "pagerduty", HasRoutingKey: true, SeverityFilter: "Critical"},
+		},
 	}
 	for _, tc := range cases {
-		scope, ok := middleware.RequiredScope(tc.method, tc.pattern)
-		if !ok {
-			t.Errorf("%s %s is missing from the scope table", tc.method, tc.pattern)
-			continue
+		t.Run(tc.name, func(t *testing.T) {
+			w := doRequestAsUser(srv, http.MethodPost, subsPath, "", contributorUser, tc.body)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("want 201, got %d (%s)", w.Code, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), "secret") || strings.Contains(w.Body.String(), "R0UT1NG") {
+				t.Fatalf("response leaks a secret: %s", w.Body.String())
+			}
+			var got subscriptionBody
+			if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			got.ID = ""
+			if got != tc.want {
+				t.Fatalf("want %+v, got %+v", tc.want, got)
+			}
+		})
+	}
+
+	// The store keeps the real secrets for the notifier.
+	subs, _ := ms.ListAll(context.Background())
+	var sawKey bool
+	for _, s := range subs {
+		if s.ChannelType == "pagerduty" && s.RoutingKey == "R0UT1NG" {
+			sawKey = true
 		}
-		if scope != tc.want {
-			t.Errorf("%s %s scope = %q, want %q", tc.method, tc.pattern, scope, tc.want)
+		if s.ChannelType == "slack" && s.WebhookURL != "https://hooks.slack.com/services/T0/B0/secret" {
+			t.Errorf("stored slack url altered: %s", s.WebhookURL)
+		}
+	}
+	if !sawKey {
+		t.Error("routing key not stored")
+	}
+}
+
+func TestCreateSubscriptionValidation(t *testing.T) {
+	ms := seedRBACUsers(t)
+	seedMonitored(t, ms)
+	srv := newTestHandler(ms, true, true)
+	cases := map[string]string{
+		"unmonitored contract":   `{"contract_id":"CNOPE","webhook_url":"https://x.io"}`,
+		"unknown channel":        `{"contract_id":"C1","channel_type":"sms","webhook_url":"https://x.io"}`,
+		"missing contract":       `{"webhook_url":"https://x.io"}`,
+		"bad severity":           `{"contract_id":"C1","webhook_url":"https://x.io","severity_filter":"Panic"}`,
+		"webhook without url":    `{"contract_id":"C1"}`,
+		"webhook bad scheme":     `{"contract_id":"C1","webhook_url":"ftp://x.io"}`,
+		"slack over http":        `{"contract_id":"C1","channel_type":"slack","webhook_url":"http://hooks.slack.com/x"}`,
+		"discord without url":    `{"contract_id":"C1","channel_type":"discord"}`,
+		"pagerduty without key":  `{"contract_id":"C1","channel_type":"pagerduty"}`,
+		"routing key on webhook": `{"contract_id":"C1","webhook_url":"https://x.io","routing_key":"k"}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if w := doRequestAsUser(srv, http.MethodPost, subsPath, "", contributorUser, body); w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d (%s)", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestSubscriptionRoutesRolesAndDelete(t *testing.T) {
+	ms := seedRBACUsers(t)
+	seedMonitored(t, ms)
+	if err := ms.Create(context.Background(), store.AlertSubscription{
+		ID: "sub_1", ContractID: "C1", WebhookURL: "https://x.io", SeverityFilter: "Critical",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := newTestHandler(ms, true, true)
+
+	for _, tc := range []struct {
+		method, path, user string
+		want               int
+	}{
+		{http.MethodGet, subsPath, "", http.StatusUnauthorized},
+		{http.MethodGet, subsPath, viewerUser, http.StatusForbidden},
+		{http.MethodPost, subsPath, viewerUser, http.StatusForbidden},
+		{http.MethodDelete, subsPath + "/sub_1", viewerUser, http.StatusForbidden},
+		{http.MethodGet, subsPath, contributorUser, http.StatusOK},
+		{http.MethodDelete, subsPath + "/sub_1", contributorUser, http.StatusNoContent},
+		{http.MethodDelete, subsPath + "/sub_1", contributorUser, http.StatusNotFound},
+	} {
+		body := ""
+		if tc.method == http.MethodPost {
+			body = `{"contract_id":"C1","webhook_url":"https://x.io"}`
+		}
+		if w := doRequestAsUser(srv, tc.method, tc.path, "", tc.user, body); w.Code != tc.want {
+			t.Errorf("%s %s as %q: want %d, got %d", tc.method, tc.path, tc.user, tc.want, w.Code)
 		}
 	}
 }

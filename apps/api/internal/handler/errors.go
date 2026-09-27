@@ -14,6 +14,7 @@ const (
 	CodeForbidden        = "FORBIDDEN"
 	CodeRateLimited      = "RATE_LIMITED"
 	CodeUnsupportedMedia = "UNSUPPORTED_MEDIA_TYPE"
+	CodeUnauthorized     = "UNAUTHORIZED"
 )
 
 type errorBody struct {

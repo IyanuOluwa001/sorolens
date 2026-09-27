@@ -25,17 +25,6 @@ type Store interface {
 	CreateNextMonthPartition(ctx context.Context) error
 	CreateMonthlyPartitionIfNotExists(ctx context.Context, year int, month int) error
 
-	// GetIndexerCursor returns the last committed ledger for a network, or 0 if none.
-	GetIndexerCursor(ctx context.Context, network string) (uint32, error)
-	// SetIndexerCursor updates the last committed ledger for a network.
-	SetIndexerCursor(ctx context.Context, network string, ledger uint32) error
-	// BatchInsertWithCursor atomically writes events, invocations, the
-	// cross-contract call graph edges of those transactions, contract sync
-	// state, and advances the network indexer cursor within a single database
-	// transaction. Bundling call edges here is what stops a crash from
-	// committing a cursor with a half-materialised call graph behind it.
-	BatchInsertWithCursor(ctx context.Context, network string, ledger uint32, events []Event, invocations []Invocation, callEdges []CallEdge, syncState SyncState) error
-
 	// RecentHourlyActivity returns per-hour activity buckets for the most
 	// recent `hours` hours (oldest first), aggregated across events and
 	// invocations. Used by the anomaly detector to build a rolling baseline.
@@ -50,12 +39,23 @@ type Store interface {
 	// UpdateContractWasmHash records the now-current on-chain Wasm hash for a
 	// contract so subsequent polls can diff against it.
 	UpdateContractWasmHash(ctx context.Context, contractID, wasmHash string) error
+	// HasContractWasm reports whether the Wasm binary for wasmHash is cached
+	// (issue #162). The cache is content-addressed, so an existing row means
+	// the bytes never need re-fetching.
+	HasContractWasm(ctx context.Context, wasmHash string) (bool, error)
+	// UpsertContractWasm stores the raw Wasm bytes under their
+	// content-addressed hash (issue #162).
+	UpsertContractWasm(ctx context.Context, wasmHash string, code []byte) error
 
 	// ContractHealthInputs aggregates the raw signals that feed the composite
 	// health score (issue #137). It never errors on empty data.
 	ContractHealthInputs(ctx context.Context, contractID string) (HealthInputs, error)
 	// UpsertContractHealthScore caches a computed 0-100 health score.
 	UpsertContractHealthScore(ctx context.Context, h ContractHealthScore) error
+
+	// InsertFailedEvent parks an event that exhausted processing retries
+	// in the dead-letter queue (issue #202).
+	InsertFailedEvent(ctx context.Context, fe FailedEvent) error
 }
 
 // RedisClient is the subset of Redis operations the poller needs for advisory locks.
@@ -112,12 +112,6 @@ type TransactionResult struct {
 	ApplicationOrder int
 	ResultXDR        string
 	ResourceFee      int64
-	// ResultMetaXDR is the base64 TransactionMeta; DiagnosticEventsXDR is the
-	// base64 DiagnosticEvent array carried inside it (TransactionMetaV3 ->
-	// sorobanMeta.diagnosticEvents), exposed directly by getTransaction when
-	// the RPC node enables diagnostic events. The call graph is built from it.
-	ResultMetaXDR       string
-	DiagnosticEventsXDR []string
 }
 
 // LedgerEntry mirrors soroban.LedgerEntry.
@@ -174,6 +168,16 @@ type Event struct {
 	InSuccessfulCall bool
 }
 
+// FailedEvent mirrors store.FailedEvent for the indexer DLQ (issue #202).
+type FailedEvent struct {
+	EventID      string
+	ContractID   string
+	Network      string
+	EventPayload []byte
+	ErrorMessage string
+	Attempts     int
+}
+
 // Invocation mirrors store.Invocation.
 type Invocation struct {
 	TxHash           string
@@ -183,31 +187,7 @@ type Invocation struct {
 	LedgerClosedAt   time.Time
 	Status           string
 	ResultXDR        string
-	// ResourceFeeCharged is the root invocation's resource fee in stroops. It
-	// is also the pot distributed across the transaction's top-level
-	// cross-contract call edges (call_edges.fee_share).
-	ResourceFeeCharged int64
-	ApplicationOrder   int
-}
-
-// CallEdge mirrors store.CallEdge: one parent -> child invocation edge of a
-// transaction's cross-contract call graph. The root invocation is not an edge;
-// it already lives in the invocations table (tx_hash PRIMARY KEY).
-type CallEdge struct {
-	TxHash           string
-	ParentSpanID     string
-	ChildSpanID      string
-	CalleeContractID string
-	FunctionName     string
-	CPU              int64
-	Mem              int64
-	FeeShare         int64
-	Depth            int
-	// Network, Ledger and LedgerClosedAt are stamped by the poller from the
-	// contract being polled and the transaction result.
-	Network        string
-	Ledger         uint32
-	LedgerClosedAt time.Time
+	ApplicationOrder int
 }
 
 // SyncState mirrors store.SyncState.
@@ -261,3 +241,19 @@ type ContractHealthScore struct {
 	ComponentStorageTTL  int32
 	ComputedAt           time.Time
 }
+
+// ContractVersion mirrors store.ContractVersion.
+type ContractVersion struct {
+	ContractID        string
+	WasmHash          string
+	FirstSeenLedger   int64
+	TxHash            string
+	VerifiedSourceRef string
+}
+
+// ErrVersionNotFound is returned by GetLatestContractVersion when no entry exists.
+var ErrVersionNotFound = errorString("poller: contract version not found")
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }

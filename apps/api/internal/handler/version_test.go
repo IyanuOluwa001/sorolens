@@ -2,103 +2,95 @@ package handler_test
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"strings"
 	"testing"
 
-	"github.com/sorolens/sorolens/apps/api/internal/handler"
-	"github.com/sorolens/sorolens/apps/api/internal/router"
+	"github.com/sorolens/sorolens/apps/api/internal/buildinfo"
 	"github.com/sorolens/sorolens/apps/api/internal/store"
 )
 
-const versionPath = "/api/v1/version"
-
-// newBuildInfoHandler returns a router whose handler reports the given build
-// metadata, mirroring how main.go wires the ldflags-injected values.
-func newBuildInfoHandler(info handler.BuildInfo) http.Handler {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	h := &handler.Handler{
-		Store:       store.NewMockStore(),
-		DB:          &store.MockPinger{Healthy: true},
-		Redis:       &store.MockPinger{Healthy: true},
-		RedisClient: &mockRedisClient{},
-		Logger:      logger,
-		BuildInfo:   info,
+// setBuildInfo temporarily overrides the build-time ldflags values so the
+// handler can be exercised without a real -ldflags build. It returns a restore
+// func to keep the package vars untouched for other tests.
+func setBuildInfo(version, sha, builtAt string) func() {
+	prevVersion, prevSHA, prevBuiltAt := buildinfo.Version, buildinfo.GitSHA, buildinfo.BuiltAt
+	buildinfo.Version, buildinfo.GitSHA, buildinfo.BuiltAt = version, sha, builtAt
+	return func() {
+		buildinfo.Version, buildinfo.GitSHA, buildinfo.BuiltAt = prevVersion, prevSHA, prevBuiltAt
 	}
-	return router.New(h)
 }
 
-func TestVersionReturnsInjectedBuildInfo(t *testing.T) {
-	srv := newBuildInfoHandler(handler.BuildInfo{
-		Commit:    "d09cb51f1a2b3c4d",
-		BuildDate: "2026-09-25T12:00:00Z",
-	})
+func TestVersionDefaults(t *testing.T) {
+	defer setBuildInfo("", "", "")()
 
-	// No credential is sent: the endpoint is public.
-	req := httptest.NewRequest(http.MethodGet, versionPath, nil)
+	srv := newTestHandler(store.NewMockStore(), true, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("want 200, got %d", w.Code)
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("want Content-Type application/json, got %q", ct)
 	}
 
-	var body map[string]any
+	var body map[string]string
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
+		t.Fatalf("decode body: %v", err)
 	}
-	for _, key := range []string{"commit", "build_date", "go_version", "api_version"} {
-		if v, ok := body[key].(string); !ok || v == "" {
-			t.Errorf("want non-empty string %q in response, got %v", key, body[key])
+	for _, key := range []string{"version", "git_sha", "built_at"} {
+		if body[key] != "dev" {
+			t.Errorf("want %s=dev when unset, got %q", key, body[key])
 		}
-	}
-	if body["commit"] != "d09cb51f1a2b3c4d" {
-		t.Errorf("want injected commit, got %v", body["commit"])
-	}
-	if body["build_date"] != "2026-09-25T12:00:00Z" {
-		t.Errorf("want injected build_date, got %v", body["build_date"])
-	}
-	if body["api_version"] != handler.APIVersion {
-		t.Errorf("want api_version=%q, got %v", handler.APIVersion, body["api_version"])
-	}
-	if v, _ := body["go_version"].(string); !strings.HasPrefix(v, "go") {
-		t.Errorf("want a Go version in go_version, got %q", v)
 	}
 }
 
-func TestVersionFallsBackToDefaults(t *testing.T) {
-	// A binary built without ldflags must still answer with all four fields
-	// rather than empty strings.
-	srv := newBuildInfoHandler(handler.BuildInfo{})
+func TestVersionInjected(t *testing.T) {
+	defer setBuildInfo("1.4.2", "abc1234", "2026-01-02T15:04:05Z")()
 
-	req := httptest.NewRequest(http.MethodGet, versionPath, nil)
+	srv := newTestHandler(store.NewMockStore(), true, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("want 200, got %d", w.Code)
 	}
 
 	var body map[string]string
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
+		t.Fatalf("decode body: %v", err)
 	}
-	if body["commit"] != handler.DefaultCommit {
-		t.Errorf("want commit=%q, got %q", handler.DefaultCommit, body["commit"])
+	if body["version"] != "1.4.2" {
+		t.Errorf("want version=1.4.2, got %q", body["version"])
 	}
-	if body["build_date"] != handler.DefaultBuildDate {
-		t.Errorf("want build_date=%q, got %q", handler.DefaultBuildDate, body["build_date"])
+	if body["git_sha"] != "abc1234" {
+		t.Errorf("want git_sha=abc1234, got %q", body["git_sha"])
 	}
-	if body["api_version"] != handler.APIVersion {
-		t.Errorf("want api_version=%q, got %q", handler.APIVersion, body["api_version"])
+	if body["built_at"] != "2026-01-02T15:04:05Z" {
+		t.Errorf("want built_at=2026-01-02T15:04:05Z, got %q", body["built_at"])
 	}
-	if !strings.HasPrefix(body["go_version"], "go") {
-		t.Errorf("want a Go version in go_version, got %q", body["go_version"])
+}
+
+func TestVersionMalformedBuiltAtFallsBackToDev(t *testing.T) {
+	defer setBuildInfo("1.4.2", "abc1234", "not-rfc3339")()
+
+	srv := newTestHandler(store.NewMockStore(), true, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["built_at"] != "dev" {
+		t.Errorf("want built_at=dev for malformed value, got %q", body["built_at"])
 	}
 }
