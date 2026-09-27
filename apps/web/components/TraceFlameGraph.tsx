@@ -36,7 +36,7 @@ function metricValue(node: TraceNode, metric: Metric): number {
 function maxMetric(node: TraceNode, metric: Metric): number {
   return node.children.reduce(
     (max, child) => Math.max(max, maxMetric(child, metric)),
-    metricValue(node, metric),
+    metricValue(node, metric)
   );
 }
 
@@ -84,7 +84,11 @@ function FlameFrame({
   const isRoot = node.depth === 0;
 
   return (
-    <div data-testid="trace-frame" data-span-id={node.span_id} data-depth={node.depth}>
+    <div
+      data-testid="trace-frame"
+      data-span-id={node.span_id}
+      data-depth={node.depth}
+    >
       <div
         className="flex items-center"
         style={{ paddingLeft: `${node.depth * 16}px` }}
@@ -128,7 +132,11 @@ function FlameFrame({
  * stack: each frame is indented by call depth and its bar is proportional to
  * the frame's CPU (or fee) relative to the widest frame in the tree.
  */
-export function TraceFlameGraph({ root, hasEdges, truncated }: TraceFlameGraphProps) {
+export function TraceFlameGraph({
+  root,
+  hasEdges,
+  truncated,
+}: TraceFlameGraphProps) {
   const metric = pickMetric(root);
   const max = maxMetric(root, metric);
 

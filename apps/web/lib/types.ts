@@ -497,8 +497,6 @@ export interface GroupDeletedResponse {
   deleted: boolean;
 }
 
-
-
 // ---- source verification ---------------------------------------------------
 
 export interface VerificationDiagnostic {

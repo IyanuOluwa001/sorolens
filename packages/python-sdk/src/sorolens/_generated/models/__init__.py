@@ -1,5 +1,6 @@
 """Contains all the data models used in inputs/outputs"""
 
+from .add_group_contract_body import AddGroupContractBody
 from .add_to_watchlist_body import AddToWatchlistBody
 from .alert_group import AlertGroup
 from .alert_group_severity import AlertGroupSeverity
@@ -59,6 +60,7 @@ from .create_api_key_admin_response_201 import CreateApiKeyAdminResponse201
 from .create_api_key_body import CreateApiKeyBody
 from .create_api_key_body_scopes_item import CreateApiKeyBodyScopesItem
 from .create_api_key_response_201 import CreateApiKeyResponse201
+from .create_group_body import CreateGroupBody
 from .error import Error
 from .error_error_type_0 import ErrorErrorType0
 from .error_error_type_0_code import ErrorErrorType0Code
@@ -79,6 +81,14 @@ from .get_contract_report_history_response_200 import (
 from .get_contract_uptime_window import GetContractUptimeWindow
 from .get_global_stats_response_200 import GetGlobalStatsResponse200
 from .get_watchdog_stats_network import GetWatchdogStatsNetwork
+from .group import Group
+from .group_contract import GroupContract
+from .group_deleted import GroupDeleted
+from .group_detail import GroupDetail
+from .group_list import GroupList
+from .group_membership import GroupMembership
+from .group_stats import GroupStats
+from .group_summary import GroupSummary
 from .health_check import HealthCheck
 from .health_response_200 import HealthResponse200
 from .health_score import HealthScore
@@ -135,6 +145,7 @@ from .readyz_response_503_checks import ReadyzResponse503Checks
 from .recent_events_response_200 import RecentEventsResponse200
 from .register_contract_body import RegisterContractBody
 from .register_contract_body_network import RegisterContractBodyNetwork
+from .remove_group_contract_body import RemoveGroupContractBody
 from .requeue_failed_event_response_200 import RequeueFailedEventResponse200
 from .role_error import RoleError
 from .scope_error import ScopeError
@@ -144,6 +155,7 @@ from .slack_message_blocks_item import SlackMessageBlocksItem
 from .slack_message_response_type import SlackMessageResponseType
 from .storage_entry import StorageEntry
 from .stream_contract_events_response_200 import StreamContractEventsResponse200
+from .update_group_body import UpdateGroupBody
 from .uptime_result import UptimeResult
 from .uptime_result_window import UptimeResultWindow
 from .v2_activity_response import V2ActivityResponse
@@ -219,6 +231,7 @@ from .watchlist_item import WatchlistItem
 
 __all__ = (
     "APIKey",
+    "AddGroupContractBody",
     "AddToWatchlistBody",
     "AlertGroup",
     "AlertGroupSeverity",
@@ -273,6 +286,7 @@ __all__ = (
     "CreateApiKeyBody",
     "CreateApiKeyBodyScopesItem",
     "CreateApiKeyResponse201",
+    "CreateGroupBody",
     "Error",
     "ErrorErrorType0",
     "ErrorErrorType0Code",
@@ -291,6 +305,14 @@ __all__ = (
     "GetContractUptimeWindow",
     "GetGlobalStatsResponse200",
     "GetWatchdogStatsNetwork",
+    "Group",
+    "GroupContract",
+    "GroupDeleted",
+    "GroupDetail",
+    "GroupList",
+    "GroupMembership",
+    "GroupStats",
+    "GroupSummary",
     "HealthCheck",
     "HealthResponse200",
     "HealthScore",
@@ -345,6 +367,7 @@ __all__ = (
     "RecentEventsResponse200",
     "RegisterContractBody",
     "RegisterContractBodyNetwork",
+    "RemoveGroupContractBody",
     "RequeueFailedEventResponse200",
     "RoleError",
     "ScopeError",
@@ -354,6 +377,7 @@ __all__ = (
     "SlackMessageResponseType",
     "StorageEntry",
     "StreamContractEventsResponse200",
+    "UpdateGroupBody",
     "UptimeResult",
     "UptimeResultWindow",
     "V2ActivityResponse",

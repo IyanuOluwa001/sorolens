@@ -82,6 +82,13 @@ paths:
       tags:
         - Contracts
       summary: Cross-contract call graph trace for a transaction
+      operationId: getInvocationTrace
+      parameters:
+        - name: tx_hash
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         '200':
           description: Trace returned
@@ -90,6 +97,13 @@ paths:
       tags:
         - Watchdog
       summary: Reveal a subscription signing secret
+      operationId: getSubscriptionSigningSecret
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         '200':
           description: Secret returned
@@ -98,6 +112,13 @@ paths:
       tags:
         - Watchdog
       summary: Rotate a subscription signing secret
+      operationId: rotateSubscriptionSigningSecret
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         '200':
           description: New secret returned
@@ -2165,75 +2186,6 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
-
-components:
-  securitySchemes:
-    ApiKeyAuth:
-      type: http
-      scheme: bearer
-      description: "Scoped API key. Send as `Authorization: Bearer <token>` (or `X-API-Key`)."
-    RoleAuth:
-      type: apiKey
-      in: header
-      name: X-User-ID
-      description: |
-        Role-based auth. Resolve a user identity from one of
-        X-User-ID, X-GitHub-Login, X-User-Sub, or X-GitHub-ID and enforce the
-        minimum role declared next to this security scheme.
-    IdentityHeaderAuth:
-      type: apiKey
-      in: header
-      name: X-User-ID
-      description: Watchlist and contract-group endpoints read the user ID from X-User-ID.
-
-  parameters:
-    ContractID:
-      name: id
-      in: path
-      required: true
-      schema:
-        type: string
-      description: Contract ID (starts with C).
-    Cursor:
-      name: cursor
-      in: query
-      required: false
-      schema:
-        type: string
-      description: Opaque pagination cursor from a previous response.
-    Limit:
-      name: limit
-      in: query
-      required: false
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 200
-      description: Page size (default 50, clamped to 200).
-    NetworkParam:
-      name: network
-      in: query
-      required: false
-      schema:
-        type: string
-        enum: [testnet, mainnet, futurenet, standalone]
-      description: Network filter; empty means all networks.
-    UserIDHeader:
-      name: X-User-ID
-      in: header
-      required: true
-      schema:
-        type: string
-      description: Caller user ID.
-    GroupID:
-      name: id
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-      description: Group ID.
                 type: object
                 description: See /api/v1/contracts/{id}/snapshot; already v2-conformant.
         "404":
@@ -3771,6 +3723,14 @@ components:
       schema:
         type: string
       description: Caller user ID.
+    GroupID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Group ID.
     WatchlistContractID:
       name: contractId
       in: path
@@ -4989,58 +4949,6 @@ components:
               type: boolean
               description: Present and true only when storage hit the 1000-entry cap.
 
-    APIKey:
-      type: object
-      required: [id, name, key_prefix, scopes, created_at, last_used_at, revoked_at]
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        key_prefix:
-          type: string
-        scopes:
-          type: array
-          items:
-            type: string
-        created_at:
-          type: string
-          format: date-time
-        last_used_at:
-          type: string
-          format: date-time
-          nullable: true
-        revoked_at:
-          type: string
-          format: date-time
-          nullable: true
-
-    Watchlist:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/WatchlistItem"
-
-    WatchlistItem:
-      type: object
-      required: [contract_id, added_at]
-      properties:
-        contract_id:
-          type: string
-        added_at:
-          type: string
-          format: date-time
-
-    InWatchlist:
-      type: object
-      required: [in_watchlist]
-      properties:
-        in_watchlist:
-          type: boolean
-
     Group:
       type: object
       required: [id, owner_id, name, created_at]
@@ -5145,29 +5053,6 @@ components:
       properties:
         deleted:
           type: boolean
-
-    WatchdogStats:
-      type: object
-      required: [total_monitored, healthy, degraded, unresponsive, total_alerts, critical_alerts]
-      properties:
-        total_monitored:
-          type: integer
-          format: int64
-        healthy:
-          type: integer
-          format: int64
-        degraded:
-          type: integer
-          format: int64
-        unresponsive:
-          type: integer
-          format: int64
-        total_alerts:
-          type: integer
-          format: int64
-        critical_alerts:
-          type: integer
-          format: int64
 
     FailedEvent:
       type: object

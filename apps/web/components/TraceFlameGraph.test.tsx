@@ -35,7 +35,7 @@ vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
     constructor(
       public status: number,
-      message: string,
+      message: string
     ) {
       super(message);
       this.name = "ApiError";
@@ -49,7 +49,11 @@ expect.extend(matchers);
 
 const TX_HASH = "a".repeat(64);
 
-function leaf(span: string, depth: number, overrides: Partial<TraceNode> = {}): TraceNode {
+function leaf(
+  span: string,
+  depth: number,
+  overrides: Partial<TraceNode> = {}
+): TraceNode {
   return {
     span_id: span,
     parent_span_id: span.slice(0, span.lastIndexOf(".")),
@@ -145,7 +149,7 @@ describe("TraceFlameGraph", () => {
   it("sizes frames by CPU and says so", () => {
     render(<TraceFlameGraph root={ROOT} hasEdges />);
     expect(screen.getByTestId("flamegraph-metric").textContent).toMatch(
-      /cpu instructions/i,
+      /cpu instructions/i
     );
   });
 
@@ -157,7 +161,7 @@ describe("TraceFlameGraph", () => {
     };
     render(<TraceFlameGraph root={noCPU} hasEdges />);
     expect(screen.getByTestId("flamegraph-metric").textContent).toMatch(
-      /fee share/i,
+      /fee share/i
     );
   });
 
@@ -188,7 +192,7 @@ describe("CallTracePanel", () => {
     render(<CallTracePanel initialTxHash={TX_HASH} />);
 
     await waitFor(() =>
-      expect(screen.getByTestId("trace-flamegraph")).toBeDefined(),
+      expect(screen.getByTestId("trace-flamegraph")).toBeDefined()
     );
     expect(mockGetInvocationTrace).toHaveBeenCalledWith(TX_HASH);
     expect(screen.getByText("3 cross-contract calls")).toBeDefined();
@@ -202,10 +206,12 @@ describe("CallTracePanel", () => {
     fireEvent.change(screen.getByLabelText(/transaction hash/i), {
       target: { value: TX_HASH.toUpperCase() },
     });
-    fireEvent.submit(screen.getByRole("button", { name: /load trace/i }).closest("form")!);
+    fireEvent.submit(
+      screen.getByRole("button", { name: /load trace/i }).closest("form")!
+    );
 
     await waitFor(() =>
-      expect(mockGetInvocationTrace).toHaveBeenCalledWith(TX_HASH),
+      expect(mockGetInvocationTrace).toHaveBeenCalledWith(TX_HASH)
     );
   });
 
@@ -215,7 +221,9 @@ describe("CallTracePanel", () => {
     fireEvent.change(screen.getByLabelText(/transaction hash/i), {
       target: { value: "not-a-hash" },
     });
-    fireEvent.submit(screen.getByRole("button", { name: /load trace/i }).closest("form")!);
+    fireEvent.submit(
+      screen.getByRole("button", { name: /load trace/i }).closest("form")!
+    );
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/64-character transaction hash/i);

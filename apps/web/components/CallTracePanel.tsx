@@ -72,7 +72,10 @@ export function CallTracePanel({ initialTxHash = "" }: CallTracePanelProps) {
 
   return (
     <div className="space-y-4">
-      <form onSubmit={handleSubmit} className="flex flex-wrap items-center gap-2">
+      <form
+        onSubmit={handleSubmit}
+        className="flex flex-wrap items-center gap-2"
+      >
         <input
           id="trace-tx-hash"
           aria-label="Transaction hash"
