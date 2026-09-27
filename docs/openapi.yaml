@@ -75,6 +75,30 @@ tags:
     description: Prometheus metrics
 
 paths:
+  /api/v1/invocations/{tx_hash}/trace:
+    get:
+      tags:
+        - Contracts
+      summary: Cross-contract call graph trace for a transaction
+      responses:
+        '200':
+          description: Trace returned
+  /api/v1/watchdog/subscriptions/{id}/signing-secret:
+    get:
+      tags:
+        - Watchdog
+      summary: Reveal a subscription signing secret
+      responses:
+        '200':
+          description: Secret returned
+  /api/v1/watchdog/subscriptions/{id}/rotate:
+    post:
+      tags:
+        - Watchdog
+      summary: Rotate a subscription signing secret
+      responses:
+        '200':
+          description: New secret returned
   /health:
     get:
       tags: [Health]

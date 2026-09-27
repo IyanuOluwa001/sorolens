@@ -480,3 +480,44 @@ export interface ContractVerification {
   verified_at?: string;
   updated_at: string;
 }
+
+/** Aggregated per-contract statistics shown side by side in the compare view. */
+export interface CompareStats {
+  event_count_24h: number;
+  event_count_7d: number;
+  invocation_count: number;
+  avg_cpu: number;
+  avg_fee: number;
+  last_activity: string | null;
+}
+
+/**
+ * One frame of a transaction's cross-contract call tree, as returned by
+ * `GET /api/v1/invocations/{tx_hash}/trace`. `span_id` is a deterministic
+ * call-path string ("0", "0.0", "0.1", "0.0.0"); the root always has "0" and
+ * is backed by the invocations row, every other node by a call_edges row.
+ */
+export interface TraceNode {
+  span_id: string;
+  parent_span_id?: string;
+  contract_id?: string;
+  function_name?: string;
+  cpu: number;
+  mem: number;
+  fee_share: number;
+  depth: number;
+  children: TraceNode[];
+}
+
+export interface TraceResponse {
+  tx_hash: string;
+  status?: string;
+  network?: string;
+  ledger: number;
+  root: TraceNode;
+  edge_count: number;
+  /** False when the transaction recorded no cross-contract calls. */
+  has_edges: boolean;
+  /** True when the indexer's caps dropped frames from the tree. */
+  truncated: boolean;
+}

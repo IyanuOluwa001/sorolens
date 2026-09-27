@@ -272,6 +272,11 @@ func TestV2CoversEveryV1Route(t *testing.T) {
 		"GET /api/v1/contracts/{id}/snapshot.json":    true,
 		"GET /api/v1/stream/events":                   true,
 		"GET /api/v1/watchdog/subscriptions":          true,
+		// Cross-contract call graph (our addition): no v2 twin yet.
+		"GET /api/v1/invocations/{tx_hash}/trace": true,
+		// Signing-secret reveal/rotate (our addition): no v2 twin yet.
+		"GET /api/v1/watchdog/subscriptions/{id}/signing-secret": true,
+		"POST /api/v1/watchdog/subscriptions/{id}/rotate":        true,
 		"POST /api/v1/watchdog/subscriptions":         true,
 		"DELETE /api/v1/watchdog/subscriptions/{id}":  true,
 		"GET /api/v1/watchdog/contracts/{id}/uptime":  true,

@@ -15,6 +15,7 @@ type MockStore struct {
 	contracts             map[string]Contract
 	events                []Event
 	invocations           []Invocation
+	callEdges             []CallEdge
 	storageEntries        []StorageEntry
 	syncStates            map[string]SyncState
 	globalStats           GlobalStats
@@ -47,6 +48,8 @@ type MockStore struct {
 	GetGlobalStatsErr           error
 	ListEventsErr               error
 	ListInvocationsErr          error
+	GetInvocationErr            error
+	GetCallEdgesErr             error
 	ListStorageErr              error
 	GetContractStatsErr         error
 	RecentEventsErr             error

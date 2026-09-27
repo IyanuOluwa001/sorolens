@@ -36,6 +36,7 @@ import type {
   HealthScoreResponse,
   ContractVerification,
   LabelResolution,
+  TraceResponse,
 } from "./types";
 import { recordLastUpdated, resourceFromUrl } from "./lastUpdated";
 
@@ -662,5 +663,11 @@ export function watchlistStatus(
   return fetchJson<WatchlistStatusResponse>(
     `${API_URL}/api/v1/watchlist/${contractId}/status`,
     { headers: { "X-User-ID": userId } }
+  );
+}
+
+export function getInvocationTrace(txHash: string): Promise<TraceResponse> {
+  return fetchJson<TraceResponse>(
+    `${API_URL}/api/v1/invocations/${txHash}/trace`
   );
 }
