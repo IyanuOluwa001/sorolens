@@ -62,6 +62,15 @@ var routeScopes = map[string]string{
 
 	"GET /api/v1/invocations/{tx_hash}/trace": ScopeReadContracts,
 
+	"GET /api/v1/rules":           ScopeReadContracts,
+	"GET /api/v1/rules/metrics":   ScopeReadContracts,
+	"GET /api/v1/rules/library":   ScopeReadContracts,
+	"POST /api/v1/rules/validate": ScopeReadContracts,
+	"POST /api/v1/rules":          ScopeWriteContracts,
+	"POST /api/v1/rules/preview":  ScopeWriteContracts,
+	"PATCH /api/v1/rules/{id}":    ScopeWriteContracts,
+	"DELETE /api/v1/rules/{id}":   ScopeWriteContracts,
+
 	"GET /api/v1/dlq":               ScopeReadContracts,
 	"POST /api/v1/dlq/{id}/requeue": ScopeWriteContracts,
 
