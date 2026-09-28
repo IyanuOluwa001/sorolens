@@ -8,7 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
+
+	"github.com/sorolens/sorolens/services/indexer/internal/webhooksig"
 )
 
 // Notification channel types (alert_subscriptions.channel_type, issue #127).
@@ -39,6 +42,10 @@ type AlertSubscription struct {
 	ChannelType string
 	// RoutingKey is the PagerDuty integration key (pagerduty only).
 	RoutingKey string
+	// SigningSecret is the "whsec_..." HMAC-SHA256 key deliveries to this
+	// subscription are signed with (issue #327). A delivery is skipped when it
+	// is empty, so unsigned payloads are never sent.
+	SigningSecret string
 }
 
 // explorerURL links an alert to the transaction that raised it.
@@ -239,10 +246,16 @@ func pagerDutyPayload(a Alert, routingKey string) map[string]any {
 // httpClient is the notifier's HTTP client; tests may replace it.
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
+// nowFunc is the clock used to timestamp deliveries; tests may replace it.
+var nowFunc = time.Now
+
 // DispatchAlerts queries matching subscriptions for a critical alert and
 // posts a channel-formatted notification to each one. It retries once on
 // 5xx responses, logs and skips on 4xx. Each request has a 10-second
 // timeout.
+//
+// Every delivery is signed with the subscription's HMAC-SHA256 signing
+// secret; see docs/webhooks.md for the wire format a receiver verifies.
 func DispatchAlerts(ctx context.Context, alert Alert, subStore AlertSubscriptionStore, logger *slog.Logger) {
 	if alert.Severity != "Critical" {
 		return
@@ -264,14 +277,31 @@ func DispatchAlerts(ctx context.Context, alert Alert, subStore AlertSubscription
 
 // deliver sends one notification, retrying once on a 5xx. Each attempt
 // builds a fresh request so the body is re-sent in full.
+//
+// The timestamp and HMAC signature are computed once per delivery and reused
+// across retries, so a receiver can verify a retry with the same MAC. A
+// subscription without a signing secret is never delivered to: docs/webhooks.md
+// promises that unsigned payloads are never sent.
 func deliver(ctx context.Context, sub AlertSubscription, alert Alert, logger *slog.Logger) {
 	url, body, err := FormatNotification(sub, alert)
 	if err != nil {
 		logger.Error("dispatch alerts: format", "err", err, "subscription_id", sub.ID, "channel", sub.ChannelType)
 		return
 	}
+	if sub.SigningSecret == "" {
+		logger.Error("dispatch alerts: subscription has no signing secret", "subscription_id", sub.ID)
+		return
+	}
+
+	timestamp := nowFunc().Unix()
+	signature := webhooksig.Sign(sub.SigningSecret, timestamp, body)
+	headers := map[string]string{
+		webhooksig.TimestampHeader: strconv.FormatInt(timestamp, 10),
+		webhooksig.SignatureHeader: webhooksig.SignatureHeaderValue(timestamp, signature),
+	}
+
 	for attempt := 1; attempt <= 2; attempt++ {
-		status, err := post(ctx, url, body)
+		status, err := post(ctx, url, body, headers)
 		switch {
 		case err != nil:
 			logger.Error("dispatch alerts: request failed", "err", err, "subscription_id", sub.ID, "attempt", attempt)
@@ -286,12 +316,17 @@ func deliver(ctx context.Context, sub AlertSubscription, alert Alert, logger *sl
 	}
 }
 
-func post(ctx context.Context, url string, body []byte) (int, error) {
+// post sends one signed notification request. headers carries the
+// X-Sorolens-Timestamp / X-Sorolens-Signature pair from deliver.
+func post(ctx context.Context, url string, body []byte, headers map[string]string) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err
