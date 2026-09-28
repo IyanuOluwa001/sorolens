@@ -68,6 +68,8 @@ func TestSign_UsesTimestampDotBody(t *testing.T) {
 // algorithm, so a change to Sign here would silently break every conforming
 // integration.
 func TestSign_PublishedVector(t *testing.T) {
+	// Frozen on purpose: these inputs are copied verbatim from
+	// docs/webhooks.md, so change the docs and this test together.
 	const (
 		secret    = "whsec_example_0123456789abcdef0123456789abcdef"
 		timestamp = int64(1700000000)
