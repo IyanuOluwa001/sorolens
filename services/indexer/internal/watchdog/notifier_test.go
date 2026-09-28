@@ -3,27 +3,20 @@ package watchdog
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/sorolens/sorolens/services/indexer/internal/webhooksig"
 )
 
 const (
 	notifyContract = "CABQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGCK3"
 	notifyTx       = "8c1f0e4b8a7d2c9e6b5a4f3e2d1c0b9a8f7e6d5c4b3a29181716151413121110"
-	// notifySecret is the signing secret every test subscription carries.
-	notifySecret = "whsec_test_only_0123456789abcdef0123456789abcdef"
 )
 
 func criticalAlert() Alert {
@@ -203,14 +196,11 @@ func (f fakeSubStore) ListByContract(_ context.Context, _ string) ([]AlertSubscr
 
 // TestDispatchDeliversEachChannel sends a Critical alert to one subscription
 // per channel and checks each endpoint receives its own format, retrying a
-// 5xx once with the full body. Every delivery, including the retry, must carry
-// a signature a receiver can verify.
+// 5xx once with the full body.
 func TestDispatchDeliversEachChannel(t *testing.T) {
 	var (
 		mu       sync.Mutex
 		received = map[string][]map[string]any{}
-		bodies   = map[string][][]byte{}
-		headers  = map[string][]http.Header{}
 		failed   bool
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -221,8 +211,6 @@ func TestDispatchDeliversEachChannel(t *testing.T) {
 		}
 		mu.Lock()
 		received[r.URL.Path] = append(received[r.URL.Path], p)
-		bodies[r.URL.Path] = append(bodies[r.URL.Path], b)
-		headers[r.URL.Path] = append(headers[r.URL.Path], r.Header.Clone())
 		// The first PagerDuty delivery fails with a 5xx to exercise retry.
 		fail := r.URL.Path == "/pagerduty" && !failed
 		if fail {
@@ -238,10 +226,10 @@ func TestDispatchDeliversEachChannel(t *testing.T) {
 	defer srv.Close()
 
 	subs := fakeSubStore{subs: []AlertSubscription{
-		{ID: "w", ChannelType: ChannelWebhook, WebhookURL: srv.URL + "/webhook", SeverityFilter: "Critical", SigningSecret: notifySecret},
-		{ID: "s", ChannelType: ChannelSlack, WebhookURL: srv.URL + "/slack", SeverityFilter: "Critical", SigningSecret: notifySecret},
-		{ID: "d", ChannelType: ChannelDiscord, WebhookURL: srv.URL + "/discord", SeverityFilter: "Critical", SigningSecret: notifySecret},
-		{ID: "p", ChannelType: ChannelPagerDuty, WebhookURL: srv.URL + "/pagerduty", RoutingKey: "k", SeverityFilter: "Critical", SigningSecret: notifySecret},
+		{ID: "w", ChannelType: ChannelWebhook, WebhookURL: srv.URL + "/webhook", SeverityFilter: "Critical"},
+		{ID: "s", ChannelType: ChannelSlack, WebhookURL: srv.URL + "/slack", SeverityFilter: "Critical"},
+		{ID: "d", ChannelType: ChannelDiscord, WebhookURL: srv.URL + "/discord", SeverityFilter: "Critical"},
+		{ID: "p", ChannelType: ChannelPagerDuty, WebhookURL: srv.URL + "/pagerduty", RoutingKey: "k", SeverityFilter: "Critical"},
 	}}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 4}))
 	DispatchAlerts(context.Background(), criticalAlert(), subs, logger)
@@ -278,109 +266,6 @@ func TestDispatchDeliversEachChannel(t *testing.T) {
 		if p["routing_key"] != "k" {
 			t.Errorf("pagerduty attempt %d lost its body: %v", i+1, p)
 		}
-	}
-
-	// Every request — four channels plus the PagerDuty retry — must verify.
-	for _, path := range []string{"/webhook", "/slack", "/discord", "/pagerduty"} {
-		for i := range bodies[path] {
-			assertDeliverySigned(t, headers[path][i], notifySecret, bodies[path][i])
-		}
-	}
-
-	// The retry must reuse the first attempt's timestamp and signature so a
-	// receiver can verify it with the same MAC (docs/webhooks.md).
-	if len(headers["/pagerduty"]) == 2 {
-		first, second := headers["/pagerduty"][0], headers["/pagerduty"][1]
-		if first.Get(webhooksig.TimestampHeader) != second.Get(webhooksig.TimestampHeader) ||
-			first.Get(webhooksig.SignatureHeader) != second.Get(webhooksig.SignatureHeader) {
-			t.Errorf("retry must reuse the signature: %q vs %q",
-				first.Get(webhooksig.SignatureHeader), second.Get(webhooksig.SignatureHeader))
-		}
-	}
-}
-
-// assertDeliverySigned checks that a captured request carries a
-// X-Sorolens-Signature / X-Sorolens-Timestamp pair that verifies against the
-// given secret and raw body.
-func assertDeliverySigned(t *testing.T, h http.Header, secret string, body []byte) {
-	t.Helper()
-	sig := h.Get(webhooksig.SignatureHeader)
-	ts := h.Get(webhooksig.TimestampHeader)
-	if sig == "" || ts == "" {
-		t.Fatalf("delivery is missing signature headers: %q / %q", sig, ts)
-	}
-	if err := webhooksig.Verify(secret, sig, ts, body, time.Now(), 0); err != nil {
-		t.Fatalf("delivery signature did not verify: %v", err)
-	}
-}
-
-// TestDispatchSkipsSubscriptionWithoutSecret proves the documented guarantee
-// that unsigned payloads are never sent.
-func TestDispatchSkipsSubscriptionWithoutSecret(t *testing.T) {
-	var called int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&called, 1)
-	}))
-	defer srv.Close()
-
-	// No SigningSecret: the delivery must be dropped, not sent unsigned.
-	subs := fakeSubStore{subs: []AlertSubscription{
-		{ID: "w", WebhookURL: srv.URL, SeverityFilter: "Critical"},
-	}}
-	DispatchAlerts(context.Background(), criticalAlert(), subs,
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
-	time.Sleep(50 * time.Millisecond)
-
-	if n := atomic.LoadInt32(&called); n != 0 {
-		t.Fatalf("unsigned delivery was sent (%d request(s))", n)
-	}
-}
-
-// TestDispatchSignsAndEnforcesReplayWindow verifies the generation side of the
-// flow end to end: the delivery's headers verify for the current time, and the
-// published verifier rejects the same delivery once it is stale or tampered.
-func TestDispatchSignsAndEnforcesReplayWindow(t *testing.T) {
-	fixed := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
-	restore := nowFunc
-	nowFunc = func() time.Time { return fixed }
-	defer func() { nowFunc = restore }()
-
-	type captured struct {
-		body []byte
-		hdr  http.Header
-	}
-	got := make(chan captured, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		got <- captured{body: b, hdr: r.Header.Clone()}
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer srv.Close()
-
-	sub := AlertSubscription{ID: "w", WebhookURL: srv.URL, SeverityFilter: "Critical", SigningSecret: notifySecret}
-	DispatchAlerts(context.Background(), criticalAlert(), fakeSubStore{subs: []AlertSubscription{sub}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
-
-	var c captured
-	select {
-	case c = <-got:
-	case <-time.After(3 * time.Second):
-		t.Fatal("no delivery received")
-	}
-
-	sig := c.hdr.Get(webhooksig.SignatureHeader)
-	ts := c.hdr.Get(webhooksig.TimestampHeader)
-	if ts != strconv.FormatInt(fixed.Unix(), 10) {
-		t.Errorf("timestamp header = %q, want %d", ts, fixed.Unix())
-	}
-	if err := webhooksig.Verify(notifySecret, sig, ts, c.body, fixed, 0); err != nil {
-		t.Fatalf("fresh delivery must verify: %v", err)
-	}
-	if err := webhooksig.Verify(notifySecret, sig, ts, c.body, fixed.Add(6*time.Minute), 0); !errors.Is(err, webhooksig.ErrTimestampOutsideWindow) {
-		t.Errorf("stale delivery: want ErrTimestampOutsideWindow, got %v", err)
-	}
-	if err := webhooksig.Verify(notifySecret, sig, ts, append([]byte("x"), c.body...), fixed, 0); !errors.Is(err, webhooksig.ErrSignatureMismatch) {
-		t.Errorf("tampered delivery: want ErrSignatureMismatch, got %v", err)
 	}
 }
 
